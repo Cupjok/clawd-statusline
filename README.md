@@ -15,6 +15,8 @@
 
 ## 👀 What it looks like
 
+🖥️ Shown in macOS Terminal. Other terminals draw Clawd with block characters, so it looks slightly different.
+
 ⌨️ **While Claude is working**, Clawd sits at a laptop, taps the keys with one hand and then the other, and blinks now and then (see the animation above).
 
 😌 **When the turn ends**, Clawd puts the laptop away and waits:
