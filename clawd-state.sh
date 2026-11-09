@@ -14,6 +14,10 @@ esac
 mkdir -p "$STATE_DIR"
 case "$1" in
   busy) touch "$STATE_DIR/$sid" ;;
-  idle) rm -f "$STATE_DIR/$sid" ;;
+  idle)
+    rm -f "$STATE_DIR/$sid"
+    # Sessions cancelled with Esc or killed never send idle: clear old flags.
+    find "$STATE_DIR" -type f -mmin +1440 -delete 2>/dev/null
+    ;;
 esac
 exit 0

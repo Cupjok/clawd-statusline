@@ -94,7 +94,7 @@ Set these environment variables before you start Claude Code:
 ## 🛠️ How the animation works
 
 1. 🪝 Claude Code hooks call `clawd-state.sh busy` when you send a prompt or a tool runs.
-2. 🛑 They call `clawd-state.sh idle` when the turn stops, a permission prompt opens, or the session ends.
+2. 🛑 They call `clawd-state.sh idle` when the turn stops or the session ends.
 3. 🚩 The hook writes or deletes a small flag file named after the session id.
 4. 🔁 The status line checks that flag, and `refreshInterval: 1` redraws it every second.
 5. ⌛ A flag older than 10 minutes is ignored, so Clawd stops typing if a turn is cancelled.

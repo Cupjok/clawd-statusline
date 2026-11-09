@@ -29,6 +29,9 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 SRC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Hooks run from the project folder, so settings.json needs an absolute path.
+mkdir -p "$CONFIG_DIR"
+CONFIG_DIR=$(cd "$CONFIG_DIR" && pwd)
 DEST="$CONFIG_DIR/clawd-statusline"
 SETTINGS="$CONFIG_DIR/settings.json"
 MARK="clawd-statusline/clawd-state.sh"
@@ -58,12 +61,14 @@ STRIP_HOOKS='
   else . end'
 
 if [ "$UNINSTALL" = 1 ]; then
+  # Touch statusLine only while it is still ours: then put back the one from
+  # before the install, or remove it if there was none.
   prev="$DEST/previous-statusline.json"
-  if [ -f "$prev" ]; then
-    jq --arg mark "$MARK" --slurpfile prev "$prev" "$STRIP_HOOKS"' | .statusLine = $prev[0]' "$SETTINGS" > "$tmp"
-  else
-    jq --arg mark "$MARK" "$STRIP_HOOKS"' | if ((.statusLine.command // "") | contains("clawd-statusline/statusline.sh")) then del(.statusLine) else . end' "$SETTINGS" > "$tmp"
-  fi
+  [ -f "$prev" ] || echo 'null' > "$prev"
+  jq --arg mark "$MARK" --slurpfile prev "$prev" "$STRIP_HOOKS"'
+    | if ((.statusLine.command // "") | contains("clawd-statusline/statusline.sh")) then
+        (if $prev[0] == null then del(.statusLine) else .statusLine = $prev[0] end)
+      else . end' "$SETTINGS" > "$tmp"
   mv "$tmp" "$SETTINGS"
   rm -rf "$DEST"
   echo "Clawd status line removed from $CONFIG_DIR"
@@ -87,8 +92,7 @@ jq --arg mark "$MARK" --arg sl "$sl_cmd" --arg h "$hook_cmd" "$STRIP_HOOKS"'
   | .statusLine = {type: "command", command: $sl, refreshInterval: 1}
   | reduce (
       ["UserPromptSubmit", "busy"], ["PreToolUse", "busy"], ["PostToolUse", "busy"],
-      ["Stop", "idle"], ["StopFailure", "idle"], ["PermissionRequest", "idle"],
-      ["SessionEnd", "idle"]
+      ["Stop", "idle"], ["StopFailure", "idle"], ["SessionEnd", "idle"]
     ) as [$event, $state] (.;
       .hooks[$event] = ((.hooks[$event] // []) + [{hooks: [{type: "command", command: ($h + " " + $state)}]}]))
 ' "$SETTINGS" > "$tmp"

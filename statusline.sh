@@ -14,6 +14,18 @@
 
 input=$(cat)
 
+# Numbers need a dot as the decimal mark (printf %.0f, awk). LC_ALL would
+# override LC_NUMERIC, so move it to LC_CTYPE to keep UTF-8 working.
+if [ -n "$LC_ALL" ]; then
+  export LC_CTYPE="$LC_ALL"
+  unset LC_ALL
+fi
+export LC_NUMERIC=C
+
+# The output goes through printf %b, so double any backslash in names
+# (folder, branch, model, account) to print them as they are.
+esc() { printf '%s' "${1//\\/\\\\}"; }
+
 if ! command -v jq >/dev/null 2>&1; then
   printf 'clawd-statusline: install jq to see the status line'
   exit 0
@@ -61,14 +73,31 @@ EOF
 dir_label="~"
 [ -n "$cwd" ] && dir_label=$(basename "$cwd")
 
+# Git: one status call gives branch, ahead/behind, changes and stashes.
+# --show-stash needs git 2.35+, so retry without it on older git.
 branch=""
-if [ -n "$cwd" ] && git -C "$cwd" --no-optional-locks rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  branch=$(git -C "$cwd" --no-optional-locks branch --show-current 2>/dev/null)
-  [ -z "$branch" ] && branch=$(git -C "$cwd" --no-optional-locks rev-parse --short HEAD 2>/dev/null)
+if [ -n "$cwd" ]; then
+  gs=$(git -C "$cwd" --no-optional-locks status --porcelain=v2 --branch --show-stash 2>/dev/null) ||
+    gs=$(git -C "$cwd" --no-optional-locks status --porcelain=v2 --branch 2>/dev/null) || gs=""
+  if [ -n "$gs" ]; then
+    IFS="$US" read -r branch ahead behind changed untracked stashes <<EOF
+$(printf '%s\n' "$gs" | awk -v us="$US" '
+  /^# branch.oid / { oid = $3 }
+  /^# branch.head / { head = $3 }
+  /^# branch.ab /  { ahead = substr($3, 2); behind = substr($4, 2) }
+  /^# stash /      { stash = $3 }
+  /^[12u] /        { changed++ }
+  /^\? /           { untracked++ }
+  END {
+    if (head == "(detached)") head = substr(oid, 1, 7)
+    printf "%s%s%s%s%s%s%d%s%d%s%d", head, us, ahead, us, behind, us, changed, us, untracked, us, stash
+  }')
+EOF
+  fi
 fi
 
-top=$(printf "${CYAN}%s${RESET_C}" "$dir_label")
-[ -n "$branch" ] && top="$top ${DIM}on${RESET_C} ${MAGENTA}$branch${RESET_C}"
+top=$(printf "${CYAN}%s${RESET_C}" "$(esc "$dir_label")")
+[ -n "$branch" ] && top="$top ${DIM}on${RESET_C} ${MAGENTA}$(esc "$branch")${RESET_C}"
 
 # Effort: status line input first, then CLAUDE_EFFORT, then settings.json.
 [ -z "$effort" ] && effort="$CLAUDE_EFFORT"
@@ -77,8 +106,8 @@ if [ -z "$effort" ] && [ -f "$CONFIG_DIR/settings.json" ]; then
 fi
 
 if [ -n "$model" ]; then
-  top="$top ${DIM}|${RESET_C} $model"
-  [ -n "$effort" ] && top="$top ${DIM}($effort)${RESET_C}"
+  top="$top ${DIM}|${RESET_C} $(esc "$model")"
+  [ -n "$effort" ] && top="$top ${DIM}($(esc "$effort"))${RESET_C}"
 fi
 
 # Logged-in Claude account (display name, falling back to email).
@@ -87,7 +116,7 @@ if [ "${CLAWD_SHOW_ACCOUNT:-1}" != 0 ]; then
   account_file="$HOME/.claude.json"
   [ -n "$CLAUDE_CONFIG_DIR" ] && account_file="$CLAUDE_CONFIG_DIR/.claude.json"
   account=$(jq -r '.oauthAccount | .displayName // .emailAddress // empty' "$account_file" 2>/dev/null)
-  [ -n "$account" ] && top="${YELLOW}@$account${RESET_C} ${DIM}|${RESET_C} $top"
+  [ -n "$account" ] && top="${YELLOW}@$(esc "$account")${RESET_C} ${DIM}|${RESET_C} $top"
 fi
 
 # Pick a color based on how close to the limit usage is.
@@ -107,10 +136,11 @@ format_reset() {
 }
 
 # Format a token count compactly, e.g. 43797 -> 43.8k, 1000000 -> 1M.
+# The M cut-off is 999500, because anything above would round to "1000k".
 format_tokens() {
   [ -z "$1" ] && return
   awk -v n="$1" 'BEGIN {
-    if (n >= 1000000) { v = n / 1000000; u = "M" }
+    if (n >= 999500) { v = n / 1000000; u = "M" }
     else if (n >= 1000) { v = n / 1000; u = "k" }
     else { printf "%d", n; exit }
     if (v >= 100) printf "%.0f%s", v, u;
@@ -172,23 +202,14 @@ fi
 
 if [ -n "$branch" ]; then
   g="${DIM}Git${RESET_C}"
-  status=$(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null)
-  changed=$(printf '%s\n' "$status" | grep -c '^[^?]')
-  untracked=$(printf '%s\n' "$status" | grep -c '^??')
   if [ "$changed" -eq 0 ] && [ "$untracked" -eq 0 ]; then
     g="$g ${GREEN}clean${RESET_C}"
   else
     [ "$changed" -gt 0 ] && g="$g ${YELLOW}${changed} changed${RESET_C}"
     [ "$untracked" -gt 0 ] && g="$g ${DIM}${untracked} untracked${RESET_C}"
   fi
-  counts=$(git -C "$cwd" --no-optional-locks rev-list --left-right --count 'HEAD...@{upstream}' 2>/dev/null)
-  if [ -n "$counts" ]; then
-    ahead=${counts%%[[:space:]]*}
-    behind=${counts##*[[:space:]]}
-    [ "$ahead" -gt 0 ] && g="$g ${CYAN}↑${ahead}${RESET_C}"
-    [ "$behind" -gt 0 ] && g="$g ${MAGENTA}↓${behind}${RESET_C}"
-  fi
-  stashes=$(git -C "$cwd" --no-optional-locks stash list 2>/dev/null | wc -l | tr -d ' ')
+  [ "${ahead:-0}" -gt 0 ] && g="$g ${CYAN}↑${ahead}${RESET_C}"
+  [ "${behind:-0}" -gt 0 ] && g="$g ${MAGENTA}↓${behind}${RESET_C}"
   [ "$stashes" -gt 0 ] && g="$g ${DIM}stash ${stashes}${RESET_C}"
   if [ -n "$line3" ]; then line3="$line3 ${DIM}|${RESET_C} $g"; else line3="$g"; fi
 fi
